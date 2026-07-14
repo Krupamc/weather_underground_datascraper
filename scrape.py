@@ -4,38 +4,87 @@ from bs4 import BeautifulSoup as bs
 import requests
 from requests.exceptions import HTTPError
 import convert_metric as cv
-import os
-import time
+from pathlib import Path
+import csv
+from datetime import datetime
 import config as cfg
+import pytz
 import time
 
+# None filled dict
 def empty_result(station_id, scrap_time):
     return {
         "station_id": station_id,
-        "time": scrap_time,
+        "observed_at": scrap_time.isoformat(),
         "temp": None,
-        "dew": None,
+        "dewpoint": None,
         "humidity": None,
         "wind_speed": None,
         "wind_gust": None,
         "wind_dir": None,
         "pressure": None,
-        "precipitation_rate": None,
-        "precipitation_accum": None,
+        "precip_rate": None,
+        "precip_accum": None,
         "uv": None,
-        "solar_radiation": None
+        "solar": None
     } 
 
+# Make monthly csv
+def make_csv(now):
+
+    # Make csv for that month
+    dt = datetime.fromisoformat(now)
+    month_tag = dt.strftime("%Y-%m")
+
+    data_dir = Path("data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    path = data_dir / f"scraped_data_{month_tag}.csv"
+
+    if not path.exists():
+        with path.open("w", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file)
+            writer.writerow([
+                "station_id", "observed_at", "temp",
+                "dewpoint", "humidity", "wind_speed",
+                "wind_gust", "wind_dir", "pressure",
+                "precip_rate", "precip_accum", "uv", "solar"
+            ])
+    return path
+
+# Save data to monthly csv
+def save_data(results: dict, now):
+    path = make_csv(now)
+
+    with path.open("a", newline="", encoding="utf-8") as file:
+        writer = csv.writer(file)
+        writer.writerow([
+            results["station_id"],
+            results["observed_at"],
+            results["temp"],
+            results["dewpoint"],
+            results["humidity"],
+            results["wind_speed"],
+            results["wind_gust"],
+            results["wind_dir"],
+            results["pressure"],
+            results["precip_rate"],
+            results["precip_accum"],
+            results["uv"],
+            results["solar"]
+        ])
+
+# Send back time in right timezone
 def api_timestamp():
-    dt = time.gmtime()
-    return (
-        f"{dt.tm_year:04d}-{dt.tm_mon:02d}-{dt.tm_mday:02d}"
-        f"T{dt.tm_hour:02d}:{dt.tm_min:02d}:{dt.tm_sec:02d}Z"
-    )
+    utc_now = datetime.now(pytz.UTC)
+    timezone = pytz.timezone(cfg.pytz_timezone)
+    now = utc_now.astimezone(timezone)
+    return now
 
 def scrape(station_id):
     for attempt in range(cfg.max_retries): # Try as many times as configured
         try: 
+            # base url
             url = f'https://preview.wunderground.com/dashboard/pws/{station_id}/?data-unit="m"'
 
             # Get time
@@ -140,20 +189,19 @@ def scrape(station_id):
                 # Return a dict to be turned into json later
                 return {
                     "station_id": station_id,
-                    "time": scrape_time,
+                    "observed_at": scrape_time.isoformat(),
                     "temp": temp,
-                    "dew": dew,
+                    "dewpoint": dew,
                     "humidity": humd,
                     "wind_speed": wind_speed, #KNOTS
                     "wind_gust": wind_gust,
                     "wind_dir": wind_dir,
                     "pressure": pressure,
-                    "precipitation_rate": precip_rate,
-                    "precipitation_accum": precip_accum,
+                    "precip_rate": precip_rate,
+                    "precip_accum": precip_accum,
                     "uv": uv,
-                    "solar_radiation": solar
+                    "solar": solar
                 }
-        
         
         # Error Protection and retrying
         except HTTPError as e:
@@ -164,9 +212,12 @@ def scrape(station_id):
             wait_time = cfg.backoff_factor ** attempt
             print(f"[HTTP ERROR]: {e}\nRetrying in {wait_time} seconds---")
             time.sleep(wait_time)
+            continue
         except Exception as e:
             print(f"Failed to get data for {station_id}. Error: {e}")
-            break
+            scrape_time = api_timestamp()
+            return empty_result(station_id, scrape_time) # Return empty
+    
 
 
 api_header = {
@@ -174,7 +225,15 @@ api_header = {
 }
 
 for station in cfg.stations:
-    result = scrape(station)
+    results = scrape(station)
+
+    # If we get station error, continue
+    if results is None:
+        continue
+
+    print("Saving data...")
+    save_data(results, now=results["observed_at"])
+
     print("Sending data...")
-    requests.post(cfg.URL, json=result, headers=api_header)
-    print(result)
+    requests.post(cfg.URL, json=results, headers=api_header)
+    print(results)
