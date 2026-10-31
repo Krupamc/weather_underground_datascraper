@@ -320,11 +320,14 @@ for station in cfg.stations:
         date = f"{current_date.year}-{current_date.month}-{current_date.day}"
         #print(date)
         current_date += timedelta(days=1)
-        #data = scrape(base_url=f"https://{cfg.wu_base_url}/{station}/table/{date}/{date}/daily", date)
-        #save_data(data, file)
+        raw_records = scrape(base_url=f"{cfg.wu_base_url}{station}/table/{date}/{date}/daily", date=date)
+        records = [convert_record(record) for record in raw_records]
+        save_data(records, make_csv("KMJOCEAN178"), "KMJOCEAN178")
+        if records:
+            print(records[0])
 
-raw_records = scrape(base_url=f"https://www.wunderground.com/dashboard/pws/KNJOCEAN178/table/2026-10-31/2026-10-31/daily", date="2026-10-31")
-records = [convert_record(record) for record in raw_records]
-save_data(records, make_csv("KMJOCEAN178"), "KMJOCEAN178")
-if records:
-    print(records[0])
+# raw_records = scrape(base_url=f"https://www.wunderground.com/dashboard/pws/KNJOCEAN178/table/2026-10-31/2026-10-31/daily", date="2026-10-31")
+# records = [convert_record(record) for record in raw_records]
+# save_data(records, make_csv("KMJOCEAN178"), "KMJOCEAN178")
+# if records:
+#     print(records[0])
