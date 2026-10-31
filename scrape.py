@@ -74,18 +74,17 @@ def save_data(results: dict, now):
             results["solar"]
         ])
 
-# Send back time in right timezone
+# Send back time in UTC
 def api_timestamp():
-    utc_now = datetime.now(pytz.UTC)
-    timezone = pytz.timezone(cfg.pytz_timezone)
-    now = utc_now.astimezone(timezone)
+    now = datetime.now(pytz.UTC)
     return now
 
 def scrape(station_id):
     for attempt in range(cfg.max_retries): # Try as many times as configured
         try: 
-            # base url
-            url = f'https://preview.wunderground.com/dashboard/pws/{station_id}/?data-unit="m"'
+            # base url           
+            url = f'{cfg.wu_base_url}{station_id}'
+
 
             # Get time
             scrape_time = api_timestamp()
@@ -115,10 +114,10 @@ def scrape(station_id):
                 temp = air.get('data-temp')
                 print(f"Temp: {temp}")
 
-                dew = air.get("data-dew-point")
+                dew_air = soup.find("humidity-widget-view")
+                dew = dew_air.get("data-dew-point")
                 print(f"Dew: {dew}")
-
-                humd = air.get("data-humidity")
+                humd = dew_air.get("data-humidity")
                 print(f"Humidity: {humd}")
 
                 print()
@@ -218,11 +217,12 @@ def scrape(station_id):
             scrape_time = api_timestamp()
             return empty_result(station_id, scrape_time) # Return empty
     
+#Start
+print("[SCRAPE]: Weather Scrape Started...")
 
-
-api_header = {
-    "x-api-key" : cfg.API_KEY
-}
+# Requests
+session_http = requests.Session()
+#session_http.headers.update({"x-api-key": cfg.api_key}) 
 
 for station in cfg.stations:
     results = scrape(station)
@@ -231,9 +231,13 @@ for station in cfg.stations:
     if results is None:
         continue
 
-    print("Saving data...")
+    print(f"\nSaving data...{results['station_id']}")
     save_data(results, now=results["observed_at"])
 
-    print("Sending data...")
-    requests.post(cfg.URL, json=results, headers=api_header)
-    print(results)
+    #print(f"Sending data...{results['station_id']}\n")
+    #if cfg.develop == True:
+    #    session_http.post(f"http://127.0.0.1:8000{cfg.api_weather_post}", json=results)
+    #else:
+    #    session_http.post(f"{cfg.api_base}{cfg.api_weather_post}", json=results)
+
+print("Scraping Complete! All data Saved")
