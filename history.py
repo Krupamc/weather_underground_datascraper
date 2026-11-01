@@ -12,7 +12,7 @@ import config as cfg
 import time
 
 # Playwright
-from playwright.sync_api import (sync_playwright, Error as PlaywrightError)
+from playwright.sync_api import (sync_playwright, Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError)
 
 RAW_COLUMNS = [
     "time",
@@ -238,84 +238,75 @@ def parse_table(html, date):
 def scrape(base_url: str, date: str):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
+
         try:
-            context = browser.new_context(viewport={"width": 1440, "height": 1000})
-            page = context.new_page()
-            for attempt in range(cfg.max_retries):
-                try:
-                    response = page.goto(base_url, wait_until="domcontentloaded", timeout=60_000)
-                    print("Opened the page")
-                    if response is not None and response.status >= 400:
-                        raise ValueError(f"Page returned HTTP {response.status}")
+            page = browser.new_page(
+                viewport={"width": 1440, "height": 1000}
+            )
 
-                    print("URL after navigation:", page.url)
+            try:
+                response = page.goto(
+                    base_url,
+                    wait_until="domcontentloaded",
+                    timeout=10_000,
+                )
 
-                    # Select the table
-                    page.get_by_text("Table", exact=True).click(timeout=30_000)
-                    print("Clicked Table")
+                if response is not None and response.status >= 400:
+                    print(f"[SKIP] {date}: HTTP {response.status}")
+                    return []
 
-                    table_selector = ('pws-history-table[data-loaded="true"] table')
+                page.get_by_text("Table", exact=True).click(
+                    timeout=3_000
+                )
 
-                    page.locator(table_selector).wait_for(state="visible", timeout=60_000)
-                    print("Table found")
+                page.wait_for_function(
+                    r"""
+                    () => {
+                        const table = document.querySelector(
+                            'pws-history-table[data-loaded="true"] table'
+                        );
 
-                    # Wait for actual observation rows
-                    page.wait_for_function(
-                        """
-                        () => {
-                            const table = document.querySelector(
-                                'pws-history-table[data-loaded="true"] table'
+                        if (!table) return false;
+
+                        return Array.from(
+                            table.querySelectorAll("tbody tr")
+                        ).some(row => {
+                            const cells = row.querySelectorAll("td, th");
+
+                            return (
+                                cells.length >= 10 &&
+                                /\d{1,2}:\d{2}/.test(
+                                    cells[0].textContent
+                                )
                             );
+                        });
+                    }
+                    """,
+                    timeout=5_000,
+                )
 
-                            if (!table) return false;
+                records = parse_table(page.content(), date)
 
-                            return Array.from(table.querySelectorAll("tbody tr")).some(row => {
-                                const cells = row.querySelectorAll("td, th");
+                print(f"[OK] {date}: {len(records)} observations")
+                return records
 
-                                return (
-                                    cells.length >= 10 &&
-                                    /\\d{1,2}:\\d{2}/.test(cells[0].textContent)
-                                );
-                            });
-                        }
-                        """,
-                        timeout=60_000,
-                    )
-
-                    print("Observation rows loaded")
-                    print("Finding records...")
-
-                    records = parse_table(page.content(), date)
-                    print("Finding records...")
-
-                    print(f"[OK] {date}: scraped {len(records)} observations")
-                    return records
-                except (PlaywrightError, ValueError) as e:
-                    print(
-                        f"[SCRAPE ERROR] {date}, "
-                        f"attempt {attempt + 1}/{cfg.max_retries}: {e}"
-                    )
-
-                    if attempt + 1 < cfg.max_retries:
-                        wait_time = cfg.backoff_factor ** attempt
-                        print(f"Retrying in {wait_time} seconds...")
-
-                        # Let browser operations continue during the wait.
-                        page.wait_for_timeout(wait_time * 1000)
-
-            print(f"[FAILED] No observations collected for {date}")
-            return []
+            except (PlaywrightError, ValueError) as e:
+                print(
+                    f"[SKIP] {date}: table unavailable or invalid "
+                    f"({type(e).__name__})"
+                )
+                return []
 
         finally:
             browser.close()
 
-start_date = datetime(2025, 1, 1, 0)
-end_date = datetime(2026, 10, 31, 23)
+start_date = datetime(2026, 6, 1, 0)
+end_date = datetime(2026, 9, 1, 23)
 current_date = start_date
 
 for station in cfg.stations:
     file = make_csv(station)
-    # go every day from 202 to 2026
+    # go every hour from 202 to 2026
     while current_date <= end_date:
         date = f"{current_date.year}-{current_date.month}-{current_date.day}"
         #print(date)
